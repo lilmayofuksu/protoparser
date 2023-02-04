@@ -15,8 +15,8 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-from lark import Lark, Transformer, Tree, Token
-from collections import namedtuple
+
+from lark import Lark, Transformer, Token
 import typing
 import json
 
@@ -35,72 +35,57 @@ TAGVALUE: IDENT
 RPCNAME: IDENT
 MESSAGETYPE: [ "." ] ( IDENT "." )* MESSAGENAME
 ENUMTYPE: [ "." ] ( IDENT "." )* ENUMNAME
-
-INTLIT    : DECIMALLIT | OCTALLIT | HEXLIT
+INTLIT    : DECIMALLIT | OCTALLIT | HEXLIT | SIGNEDDECDIGIT
+DECIMAL_SIGNED_LIT : SIGNEDDECDIGIT ( SIGNEDDECDIGIT )*
 DECIMALLIT: ( "1".."9" ) ( DECIMALDIGIT )*
 OCTALLIT  : "0" ( OCTALDIGIT )*
 HEXLIT    : "0" ( "x" | "X" ) HEXDIGIT ( HEXDIGIT )*
-
 FLOATLIT: ( DECIMALS "." [ DECIMALS ] [ EXPONENT ] | DECIMALS EXPONENT | "."DECIMALS [ EXPONENT ] ) | "inf" | "nan"
 DECIMALS : DECIMALDIGIT ( DECIMALDIGIT )*
 EXPONENT : ( "e" | "E" ) [ "+" | "-" ] DECIMALS
-
 BOOLLIT: "true" | "false"
-
 STRLIT: ( "'" ( CHARVALUE )* "'" ) |  ( "\"" ( CHARVALUE )* "\"" )
 CHARVALUE: HEXESCAPE | OCTESCAPE | CHARESCAPE |  /[^\0\n\\]/
 HEXESCAPE: "\\" ( "x" | "X" ) HEXDIGIT HEXDIGIT
 OCTESCAPE: "\\" OCTALDIGIT OCTALDIGIT OCTALDIGIT
 CHARESCAPE: "\\" ( "a" | "b" | "f" | "n" | "r" | "t" | "v" | "\\" | "'" | "\"" )
 QUOTE: "'" | "\""
-
 EMPTYSTATEMENT: ";"
-
 CONSTANT: FULLIDENT | ( [ "-" | "+" ] INTLIT ) | ( [ "-" | "+" ] FLOATLIT ) | STRLIT | BOOLLIT
 
 syntax: "syntax" "=" QUOTE "proto3" QUOTE ";"
-
 import: "import" [ "weak" | "public" ] STRLIT ";"
-
 package: "package" FULLIDENT ";"
-
 option: "option" OPTIONNAME  "=" CONSTANT ";"
 OPTIONNAME: ( IDENT | "(" FULLIDENT ")" ) ( "." IDENT )*
-
 TYPE: "double" | "float" | "int32" | "int64" | "uint32" | "uint64" | "sint32" | "sint64" | "fixed32" | "fixed64" | "sfixed32" | "sfixed64" | "bool" | "string" | "bytes" | MESSAGETYPE | ENUMTYPE
 FIELDNUMBER: INTLIT
-
 field: [ comments ] TYPE FIELDNAME "=" FIELDNUMBER [ "[" fieldoptions "]" ] TAIL
 fieldoptions: fieldoption ( ","  fieldoption )*
 fieldoption: OPTIONNAME "=" CONSTANT
 repeatedfield: [ comments ] "repeated" field
-
-oneof: "oneof" ONEOFNAME "{" ( oneoffield | EMPTYSTATEMENT )* "}"
-oneoffield: TYPE FIELDNAME "=" FIELDNUMBER [ "[" fieldoptions "]" ] ";"
+oneof: [ comments ] "oneof" ONEOFNAME "{" ( repeatedfield | mapfield | field | EMPTYSTATEMENT )* "}"
 
 mapfield: [ comments ] "map" "<" KEYTYPE "," TYPE ">" MAPNAME "=" FIELDNUMBER [ "[" fieldoptions "]" ] TAIL
 KEYTYPE: "int32" | "int64" | "uint32" | "uint64" | "sint32" | "sint64" | "fixed32" | "fixed64" | "sfixed32" | "sfixed64" | "bool" | "string"
-
 reserved: "reserved" ( ranges | fieldnames ) ";"
 ranges: range ( "," range )*
 range:  INTLIT [ "to" ( INTLIT | "max" ) ]
 fieldnames: FIELDNAME ( "," FIELDNAME )*
 
 enum: [ comments ] "enum" ENUMNAME enumbody
-enumbody: "{" ( enumfield | EMPTYSTATEMENT )* "}"
+enumbody: "{" ( enumfield | enumoptionfield | EMPTYSTATEMENT )* "}"
 enumfield: [ COMMENTS ] IDENT "=" INTLIT [ "[" enumvalueoption ( ","  enumvalueoption )* "]" ] TAIL
+enumoptionfield: [ COMMENTS ] "option" IDENT "=" CONSTANT [ "[" enumvalueoption ( ","  enumvalueoption )* "]" ] TAIL
 enumvalueoption: OPTIONNAME "=" CONSTANT
 
 message: [ comments ] "message" MESSAGENAME messagebody
 messagebody: "{" ( repeatedfield | field | enum | message | option | oneof | mapfield | reserved | EMPTYSTATEMENT )* "}"
-
 googleoption: "option" "(google.api.http)"  "=" "{" [ "post:" CONSTANT [ "body:" CONSTANT ] ] "}" ";"
 service: [ comments ] "service" SERVICENAME "{" ( option | rpc | EMPTYSTATEMENT )* "}"
 rpc: [ comments ] "rpc" RPCNAME "(" [ "stream" ] MESSAGETYPE ")" "returns" "(" [ "stream" ] MESSAGETYPE ")" ( ( "{" ( googleoption | option | EMPTYSTATEMENT )* "}" ) | ";" )
-
 proto:[ comments ] syntax ( import | package | option | topleveldef | EMPTYSTATEMENT )*
 topleveldef: message | enum | service | comments
-
 TAIL: ";" [/[\s|\t]/] [ COMMENT ]
 COMMENT: "//" /.*/ [ "\n" ]
 comments: COMMENT ( COMMENT )*
@@ -111,14 +96,17 @@ COMMENTS: COMMENT ( COMMENT )*
 %import common.LETTER
 %import common.WS
 %import common.NEWLINE
+%import common.SIGNED_NUMBER -> SIGNEDDECDIGIT
 %ignore WS
 '''
 
 Comment = typing.NamedTuple('Comment', [('content', str), ('tags', typing.Dict[str, typing.Any])])
 Field = typing.NamedTuple('Field', [('comment', 'Comment'), ('type', str), ('key_type', str), ('val_type', str), ('name', str), ('number', int)])
-Enum = typing.NamedTuple('Enum', [('comment', 'Comment'), ('name', str), ('fields', typing.Dict[str, 'Field'])])
+Enum = typing.NamedTuple('Enum', [('comment', 'Comment'), ('name', str), ('fields', typing.List['Field'])])
 Message = typing.NamedTuple('Message', [('comment', 'Comment'), ('name', str), ('fields', typing.List['Field']),
-                                        ('messages', typing.Dict[str, 'Message']), ('enums', typing.Dict[str, 'Enum'])])
+                                        ('messages', typing.Dict[str, 'Message']), ('enums', typing.Dict[str, 'Enum']), ('oneofs', typing.List['Oneof'])])
+Oneof = typing.NamedTuple('Oneof', [('comment', 'Comment'), ('name', str), ('fields', typing.List['Field'])])
+
 Service = typing.NamedTuple('Service', [('name', str), ('functions', typing.Dict[str, 'RpcFunc'])])
 RpcFunc = typing.NamedTuple('RpcFunc', [('name', str), ('in_type', str), ('out_type', str), ('uri', str)])
 ProtoFile = typing.NamedTuple('ProtoFile',
@@ -139,11 +127,30 @@ class ProtoTransformer(Transformer):
             comment, name_token, body = tokens
         return Message(comment, name_token.value, *body)
 
+    def oneof(self, items):
+        '''Returns a Oneof namedtuple'''
+        comment = Comment("", {})
+        oneofname = Token("ONEOFNAME", "")
+        fields = []
+        for item in items:
+            if isinstance(item, Comment):
+                comment = item
+            elif isinstance(item, Token):
+                if item.type == "ONEOFNAME":
+                    oneofname = item
+                elif item.type == "COMMENT":
+                    comment = Comment(item.value, {})
+            elif isinstance(item, Field):
+                fields.append(item)
+
+        return Oneof(comment, oneofname.value, fields)
+
     def messagebody(self, items):
         '''Returns a tuple of message body namedtuples'''
         messages = {}
         enums = {}
         fields = []
+        oneofs = []
         for item in items:
             if isinstance(item, Message):
                 messages[item.name] = item
@@ -151,7 +158,10 @@ class ProtoTransformer(Transformer):
                 enums[item.name] = item
             elif isinstance(item, Field):
                 fields.append(item)
-        return fields, messages, enums
+            elif isinstance(item, Oneof):
+                #oneofs[item.name] = item
+                oneofs.append(item)
+        return fields, messages, enums, oneofs
 
     def field(self, tokens):
         '''Returns a Field namedtuple'''
@@ -307,6 +317,9 @@ def _recursive_to_dict(obj):
                 _dict[item] = node[item]
             else:  # Process as a regular element
                 _dict[item] = (node[item])
+    elif isinstance(obj, str):
+        _dict = obj
+
     return _dict
 
 
@@ -354,6 +367,8 @@ def parse(data: str):
 def serialize2json(data):
     return json.dumps(_recursive_to_dict(parse(data)))
 
+def serialize2jsonparsed(data):
+    return json.dumps(_recursive_to_dict(data))
 
 def serialize2json_from_file(file: str):
     with open(file, 'r') as f:
